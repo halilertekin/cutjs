@@ -1,24 +1,22 @@
-# Orbit
+# [Orbit](http://play.cutjs.org/examples/game-orbit/)
 
 Orbit is a cross-platform demo game for [CutJS](http://cutjs.org/)—the best HTML5 engine for cross-platform game development!  To package this game for mobile devices [Cordova 3](http://cordova.apache.org/) is used.
 
-You can [play it here](http://play.cutjs.org/examples/game-orbit/).
+[Play it here](http://play.cutjs.org/examples/game-orbit/)
 
-Basically the game consists of following files:
+The game consists of following files:
 - `www/index.html` the page viewing the game
 - `www/app.js` game code including logic and ui
 - `www/textures.js` definition of game graphic textures
-- `www/js/cut-*.js` CutJS files
 - `www/media/*` graphic image files
 
-To prepare the project for Cordova few more files are also needed:
-- Copy `cut-loader.web.js` to `www/js/cut-loader.js`
-- Copy `cut-loader.fc.js` to `merges/android/js/cut-loader.js`
-- Copy `cut-loader.cordova.js` to `merges/ios/js/cut-loader.js`
+In addition to the game files, CutJS build for Cordova platforms is also needed:
+- `www/cut.cordova.js`
 
-For other platforms do similar to iOS.
-
-Now all you need is to build your project.  But before that make sure you have installed Cordova 3 CLI and NPM (yes, you need to google them).
+Now all you need is to build your project.  But first make sure you have [installed NPM](https://www.google.com/search?q=install+node.js+npm) and then install Cordova 3 CLI:
+```
+npm install -g cordova
+```
 
 You don't need to create a new Cordova project, but if you like just copy above files after creating it.
 
@@ -45,12 +43,12 @@ Android is also similar but requires an additional step. First, add Android plat
 cordova platform add android
 ```
 
-HTML5 Canvas usually doesn't perform well on Android, but there is a Corova plugin called [FastCanvas](https://github.com/phonegap/phonegap-plugin-fast-canvas) which we can use to shim it with a native GLSurface.
-Install [this edition](https://github.com/piqnt/phonegap-plugin-fast-canvas) of FastCanvas which is updated and optimized for CutJS:
+HTML5 Canvas usually doesn't perform well on Android, but with [FastContext](https://github.com/shakiba/fastcontext) Corova plugin you can wire it to a native GLSurface.
+Install FastContext:
 ```
-cordova plugin add https://github.com/piqnt/phonegap-plugin-fast-canvas
+cordova plugin add https://github.com/piqnt/fastcontext
 ```
-Note that FastCanvas takes up entire screen and covers the HTML page.
+Note that FastContext takes up entire screen and covers the HTML page.
 
 Then, prepare your Android project:
 ```

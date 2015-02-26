@@ -1,12 +1,12 @@
 Cut(function(root, container) {
 
-  Cut.Mouse(root, container, true);
+  Cut.Mouse(root, container);
 
   root.viewbox(200, 200);
 
   var width = 50, height = 50, r1 = 10, r2 = 20;
 
-  var image = Cut.image().appendTo(root).pin("align", 0.5);
+  var image = Cut.image().appendTo(root).pin('align', 0.5);
 
   root.on(Cut.Mouse.CLICK, function() {
     draw();
@@ -17,7 +17,7 @@ Cut(function(root, container) {
 
   function draw() {
     p = (p + 1 - 3) % 3 + 3;
-    image.setImage(Cut.Out.drawing(width, height, 4, function(ctx, ratio) {
+    image.image(Cut.Out.drawing(width, height, 4, function(ctx, ratio) {
       ctx.scale(ratio, ratio);
 
       // draw star
@@ -33,10 +33,10 @@ Cut(function(root, container) {
       }
 
       // fill & stroke
-      ctx.fillStyle = "#eee";
+      ctx.fillStyle = '#eee';
       ctx.fill();
       ctx.lineWidth = 1;
-      ctx.strokeStyle = "black";
+      ctx.strokeStyle = 'black';
       ctx.stroke();
     }));
   }

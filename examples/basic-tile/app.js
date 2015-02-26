@@ -1,10 +1,10 @@
 Cut(function(root, container) {
 
-  Cut.Mouse(root, container, true);
+  Cut.Mouse(root, container);
 
   root.viewbox(200, 200);
 
-  Cut.image("base:box").tile().appendTo(root).pin({
+  Cut.image('box').tile().appendTo(root).pin({
     width : 64,
     height : 64,
     align : 0.5

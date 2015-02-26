@@ -2,21 +2,33 @@
  * CutJS viewer for p2.js
  */
 Cut.P2 = function(world, options) {
-  Cut.P2.prototype._super.apply(this, arguments);
+  Cut.P2._super.call(this);
 
   var self = this;
   this.world = world;
 
-  this.options = Cut._options({
+  this.options = {
     maxSubSteps : 3,
     timeStep : 1 / 60,
     debug : false,
     debugPolygons : false,
     lineWidth : 0.025,
     lineColor : '#000000',
-    fillColor : Cut.P2.randomColor,
-    ratio : 128
-  }).mixin(options);
+    fillColor : function() {
+      var red = Cut.Math.random(192, 256) | 0;
+      var green = Cut.Math.random(192, 256) | 0;
+      var blue = Cut.Math.random(192, 256) | 0;
+      return "#" + red.toString(16) + green.toString(16) + blue.toString(16);
+    },
+    ratio : 128,
+    get : function(key) {
+      var value = this[key];
+      return typeof value === 'function' ? value() : value;
+    },
+    extend : function(options) {
+      return Cut._extend({}, this, options);
+    }
+  }.extend(options);
 
   world.on("addBody", function(e) {
     self.addRenderable(e.body);
@@ -56,8 +68,8 @@ Cut.P2 = function(world, options) {
   this.tempv = p2.vec2.fromValues(0, 0);
 };
 
-Cut.P2.prototype = Cut._create(Cut.prototype);
-Cut.P2.prototype._super = Cut;
+Cut.P2._super = Cut;
+Cut.P2.prototype = Cut._create(Cut.P2._super.prototype);
 Cut.P2.prototype.constructor = Cut.P2;
 
 Cut.P2.prototype.step = function(t) {
@@ -359,7 +371,7 @@ Cut.P2.prototype.drawConvex = function(verts, options) {
   for (var i = 0; i < verts.length; i++) {
     var v = verts[i], x = v[0], y = -v[1];
     width = Math.max(Math.abs(x), width);
-    height = Math.max(Math.abs(y), height)
+    height = Math.max(Math.abs(y), height);
   }
 
   var cutout = Cut.Out.drawing(2 * width + 2 * lineWidth, 2 * height + 2
@@ -393,11 +405,4 @@ Cut.P2.prototype.drawConvex = function(verts, options) {
   });
 
   return cutout;
-};
-
-Cut.P2.randomColor = function() {
-  var red = Cut.Math.random(192, 256) | 0;
-  var green = Cut.Math.random(192, 256) | 0;
-  var blue = Cut.Math.random(192, 256) | 0;
-  return "#" + red.toString(16) + green.toString(16) + blue.toString(16);
 };

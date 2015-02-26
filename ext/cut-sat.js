@@ -2,17 +2,29 @@
  * CutJS viewer for SAT.js
  */
 Cut.SAT = function(world, options) {
-  Cut.SAT.prototype._super.apply(this, arguments);
+  Cut.SAT._super.call(this);
 
   var self = this;
   this.world = world;
 
-  this.options = Cut._options({
+  this.options = {
     lineWidth : 2,
     lineColor : '#000000',
-    fillColor : Cut.SAT.randomColor,
-    ratio : 2
-  }).mixin(options);
+    fillColor : function() {
+      var red = Cut.Math.random(192, 256) | 0;
+      var green = Cut.Math.random(192, 256) | 0;
+      var blue = Cut.Math.random(192, 256) | 0;
+      return "#" + red.toString(16) + green.toString(16) + blue.toString(16);
+    },
+    ratio : 2,
+    get : function(key) {
+      var value = this[key];
+      return typeof value === 'function' ? value() : value;
+    },
+    extend : function(options) {
+      return Cut._extend({}, this, options);
+    }
+  }.extend(options);
 
   world.onAddBody = function(e) {
     self.addRenderable(e.body);
@@ -60,8 +72,8 @@ Cut.SAT = function(world, options) {
   });
 };
 
-Cut.SAT.prototype = Cut._create(Cut.prototype);
-Cut.SAT.prototype._super = Cut;
+Cut.SAT._super = Cut;
+Cut.SAT.prototype = Cut._create(Cut.SAT._super.prototype);
 Cut.SAT.prototype.constructor = Cut.SAT;
 
 Cut.SAT.prototype.simulate = function(t) {
@@ -173,11 +185,4 @@ Cut.SAT.prototype.drawConvex = function(verts, options) {
   });
 
   return cutout;
-};
-
-Cut.SAT.randomColor = function() {
-  var red = Cut.Math.random(192, 256) | 0;
-  var green = Cut.Math.random(192, 256) | 0;
-  var blue = Cut.Math.random(192, 256) | 0;
-  return "#" + red.toString(16) + green.toString(16) + blue.toString(16);
 };

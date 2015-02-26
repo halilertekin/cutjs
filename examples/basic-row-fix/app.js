@@ -1,16 +1,16 @@
 Cut(function(root, container) {
 
-  Cut.Mouse(root, container, true);
+  Cut.Mouse(root, container);
 
   root.viewbox(400, 100);
 
   var last = null;
-  var colors = [ "green", "blue", "purple", "red", "orange", "yellow" ];
+  var colors = [ 'green', 'blue', 'purple', 'red', 'orange', 'yellow' ];
 
-  var row = Cut.row().appendTo(root).pin("align", 0.5).spacing(1);
+  var row = Cut.row().appendTo(root).pin('align', 0.5).spacing(1);
   for (var i = 0; i < colors.length; i++) {
 
-    Cut.image("base:color_" + colors[i]).appendTo(row).pin("pivot", 0.5).on(
+    Cut.image('color_' + colors[i]).appendTo(row).pin('pivot', 0.5).on(
         Cut.Mouse.MOVE, function(point) {
           if (this != last) {
             last = this;

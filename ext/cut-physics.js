@@ -2,17 +2,29 @@
  * CutJS viewer for PhysicsJS
  */
 Cut.PJS = function(world, options) {
-  Cut.PJS.prototype._super.apply(this, arguments);
+  Cut.PJS._super.call(this);
 
   var self = this;
   this.world = world;
 
-  this.options = Cut._options({
+  this.options = {
     lineWidth : 2,
     lineColor : '#000000',
-    fillColor : Cut.PJS.randomColor,
-    ratio : 1
-  }).mixin(options);
+    fillColor : function() {
+      var red = Cut.Math.random(192, 256) | 0;
+      var green = Cut.Math.random(192, 256) | 0;
+      var blue = Cut.Math.random(192, 256) | 0;
+      return '#' + red.toString(16) + green.toString(16) + blue.toString(16);
+    },
+    ratio : 1,
+    get : function(key) {
+      var value = this[key];
+      return typeof value === 'function' ? value() : value;
+    },
+    extend : function(options) {
+      return Cut._extend({}, this, options);
+    }
+  }.extend(options);
 
   var subscribe = world.subscribe || world.on;
   subscribe.call(world, 'add:body', function(data) {
@@ -47,8 +59,8 @@ Cut.PJS = function(world, options) {
 
 };
 
-Cut.PJS.prototype = Cut._create(Cut.prototype);
-Cut.PJS.prototype._super = Cut;
+Cut.PJS._super = Cut;
+Cut.PJS.prototype = Cut._create(Cut.PJS._super.prototype);
 Cut.PJS.prototype.constructor = Cut.PJS;
 
 Cut.PJS.prototype.addRenderable = function(obj) {
@@ -146,11 +158,4 @@ Cut.PJS.prototype.drawConvex = function(verts, options) {
   });
 
   return cutout;
-};
-
-Cut.PJS.randomColor = function() {
-  var red = Cut.Math.random(192, 256) | 0;
-  var green = Cut.Math.random(192, 256) | 0;
-  var blue = Cut.Math.random(192, 256) | 0;
-  return '#' + red.toString(16) + green.toString(16) + blue.toString(16);
 };

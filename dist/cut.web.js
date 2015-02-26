@@ -1,16 +1,23 @@
 /*
- * CutJS 0.2.0
+ * CutJS 0.4.2
  * Copyright (c) 2013-2014 Ali Shakiba, Piqnt LLC and other contributors
  * Available under the MIT license
  * @license
  */
 
-DEBUG = (typeof DEBUG === "undefined" || DEBUG) && console;
+!function(e){if("object"==typeof exports&&"undefined"!=typeof module)module.exports=e();else if("function"==typeof define&&define.amd)define([],e);else{var f;"undefined"!=typeof window?f=window:"undefined"!=typeof global?f=global:"undefined"!=typeof self&&(f=self),f.Cut=e()}}(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+module.exports = require("../lib/main");
+
+module.exports.Mouse = require("../lib/mouse");
+
+require("../lib/loader.web");
+},{"../lib/loader.web":4,"../lib/main":5,"../lib/mouse":6}],2:[function(require,module,exports){
+DEBUG = typeof DEBUG === "undefined" || DEBUG;
 
 function Cut() {
     if (!(this instanceof Cut)) {
         if (typeof arguments[0] === "function") {
-            return Cut.Loader.load.apply(Cut.Loader, arguments);
+            return Cut.Root.add.apply(Cut.Root, arguments);
         } else if (typeof arguments[0] === "object") {
             return Cut.Texture.add.apply(Cut.Texture, arguments);
         }
@@ -28,27 +35,69 @@ function Cut() {
     this._tickBefore = [];
     this._tickAfter = [];
     this._alpha = 1;
+    this._attrs = null;
+    this._listeners = null;
+    this._flags = null;
 }
 
 Cut._create = function() {
     if (typeof Object.create == "function") {
-        return function() {
-            return Object.create.apply(null, arguments);
+        return function(proto, props) {
+            return Object.create.call(Object, proto, props);
         };
     } else {
-        var F = function() {};
-        return function(proto) {
-            if (arguments.length > 1) {
+        return function(proto, props) {
+            if (props) {
                 throw Error("Second argument is not supported!");
             }
-            if (proto === null || typeof proto != "object") {
+            if (!proto || typeof proto !== "object") {
                 throw Error("Invalid prototype!");
             }
-            F.prototype = proto;
-            return new F();
+            noop.prototype = proto;
+            return new noop();
         };
+        function noop() {}
     }
 }();
+
+Cut._extend = function(base) {
+    for (var i = 1; i < arguments.length; i++) {
+        var obj = arguments[i];
+        for (var name in obj) {
+            if (obj.hasOwnProperty(name)) {
+                base[name] = obj[name];
+            }
+        }
+    }
+    return base;
+};
+
+Cut._ensure = function(obj) {
+    if (obj && obj instanceof Cut) {
+        return obj;
+    }
+    throw "Invalid node: " + obj;
+};
+
+if (typeof performance !== "undefined" && performance.now) {
+    Cut._now = function() {
+        return performance.now();
+    };
+} else if (Date.now) {
+    Cut._now = function() {
+        return Date.now();
+    };
+} else {
+    Cut._now = function() {
+        return +new Date();
+    };
+}
+
+Cut._isArray = Array.isArray || function(value) {
+    return Object.prototype.toString.call(value) === "[object Array]";
+};
+
+Cut._TS = 0;
 
 Cut._stats = {
     create: 0,
@@ -61,19 +110,9 @@ Cut.create = function() {
     return new Cut();
 };
 
-Cut.prototype.render = function(context) {
-    Cut._stats.tick = Cut._stats.paint = Cut._stats.paste = 0;
-    var now = Cut._now();
-    var elapsed = this._lastTime ? now - this._lastTime : 0;
-    this._lastTime = now;
-    this._tick(elapsed);
-    this._paint(context);
-    Cut._stats.fps = 1e3 / (Cut._now() - now);
-};
-
 Cut.prototype.MAX_ELAPSE = Infinity;
 
-Cut.prototype._tick = function(elapsed) {
+Cut.prototype._tick = function(elapsed, now, last) {
     if (!this._visible) {
         return;
     }
@@ -84,17 +123,17 @@ Cut.prototype._tick = function(elapsed) {
     var length = this._tickBefore.length;
     for (var i = 0; i < length; i++) {
         Cut._stats.tick++;
-        this._tickBefore[i].call(this, elapsed);
+        this._tickBefore[i].call(this, elapsed, now, last);
     }
     var child, next = this._first;
     while (child = next) {
         next = child._next;
-        child._tick(elapsed);
+        child._tick(elapsed, now, last);
     }
     var length = this._tickAfter.length;
     for (var i = 0; i < length; i++) {
         Cut._stats.tick++;
-        this._tickAfter[i].call(this, elapsed);
+        this._tickAfter[i].call(this, elapsed, now, last);
     }
 };
 
@@ -146,7 +185,7 @@ Cut.prototype.toString = function() {
 };
 
 Cut.prototype.id = function(id) {
-    if (!arguments.length) {
+    if (typeof id === "undefined") {
         return this._id;
     }
     this._id = id;
@@ -154,28 +193,56 @@ Cut.prototype.id = function(id) {
 };
 
 Cut.prototype.attr = function(name, value) {
-    if (arguments.length < 2) {
-        return this._attrs ? this._attrs[name] : undefined;
+    if (typeof value === "undefined") {
+        return this._attrs !== null ? this._attrs[name] : undefined;
     }
-    (this._attrs ? this._attrs : this._attrs = {})[name] = value;
+    (this._attrs !== null ? this._attrs : this._attrs = {})[name] = value;
     return this;
 };
 
 Cut.prototype.on = Cut.prototype.listen = function(types, listener) {
-    if (typeof listener !== "function") {
-        return this;
-    }
-    types = (Cut._isArray(types) ? types.join(" ") : types).split(/\s+/);
-    for (var i = 0; i < types.length; i++) {
-        var type = types[i];
-        if (type) {
-            this._listeners = this._listeners || {};
+    if (types = this._onoff(types, listener, true)) {
+        for (var i = 0; i < types.length; i++) {
+            var type = types[i];
             this._listeners[type] = this._listeners[type] || [];
             this._listeners[type].push(listener);
-            this._listenOn(type);
+            this._flag(type, true);
         }
     }
     return this;
+};
+
+Cut.prototype.off = function(types, listener) {
+    if (types = this._onoff(types, listener, false)) {
+        for (var i = 0; i < types.length; i++) {
+            var type = types[i], all = this._listeners[type], index;
+            if (all && (index = all.indexOf(listener)) >= 0) {
+                all.splice(index, 1);
+                if (!all.length) {
+                    delete this._listeners[type];
+                }
+                this._flag(type, false);
+            }
+        }
+    }
+    return this;
+};
+
+Cut.prototype._onoff = function(types, listener, create) {
+    if (!types || !types.length || typeof listener !== "function") {
+        return false;
+    }
+    if (!(types = (Cut._isArray(types) ? types.join(" ") : types).match(/\S+/g))) {
+        return false;
+    }
+    if (this._listeners === null) {
+        if (create) {
+            this._listeners = {};
+        } else {
+            return false;
+        }
+    }
+    return types;
 };
 
 Cut.prototype.listeners = function(type) {
@@ -198,24 +265,24 @@ Cut.prototype.trigger = function(name, args) {
     return this;
 };
 
-Cut.prototype.visit = function(visitor) {
+Cut.prototype.visit = function(visitor, data) {
     var reverse = visitor.reverse;
     var visible = visitor.visible;
-    if (visitor.start && visitor.start(this)) {
+    if (visitor.start && visitor.start(this, data)) {
         return;
     }
     var child, next = reverse ? this.last(visible) : this.first(visible);
     while (child = next) {
         next = reverse ? child.prev(visible) : child.next(visible);
-        if (child.visit(visitor, reverse)) {
+        if (child.visit(visitor, data)) {
             return true;
         }
     }
-    return visitor.end && visitor.end(this);
+    return visitor.end && visitor.end(this, data);
 };
 
 Cut.prototype.visible = function(visible) {
-    if (!arguments.length) {
+    if (typeof visible === "undefined") {
         return this._visible;
     }
     this._visible = visible;
@@ -271,9 +338,7 @@ Cut.prototype.last = function(visible) {
 
 Cut.prototype.append = function() {
     for (var i = 0; i < arguments.length; i++) {
-        if (!Cut._isCut(arguments[i])) {
-            throw "It is not a Cut node!";
-        }
+        Cut._ensure(arguments[i]);
         arguments[i].appendTo(this);
     }
     return this;
@@ -281,21 +346,14 @@ Cut.prototype.append = function() {
 
 Cut.prototype.prepend = function() {
     for (var i = 0; i < arguments.length; i++) {
-        if (!Cut._isCut(arguments[i])) {
-            throw "It is not a Cut node!";
-        }
+        Cut._ensure(arguments[i]);
         arguments[i].prependTo(this);
     }
     return this;
 };
 
 Cut.prototype.appendTo = function(parent) {
-    if (!parent) {
-        throw "Parent is null!";
-    }
-    if (!Cut._isCut(parent)) {
-        throw "It is not a Cut node!";
-    }
+    Cut._ensure(parent);
     this.remove();
     if (parent._last) {
         parent._last._next = this;
@@ -306,7 +364,7 @@ Cut.prototype.appendTo = function(parent) {
     if (!parent._first) {
         parent._first = this;
     }
-    this._parent._listenOn(this);
+    this._parent._flag(this, true);
     this._ts_parent = Cut._TS++;
     parent._ts_children = Cut._TS++;
     parent.touch();
@@ -314,12 +372,7 @@ Cut.prototype.appendTo = function(parent) {
 };
 
 Cut.prototype.prependTo = function(parent) {
-    if (!parent) {
-        throw "Parent is null!";
-    }
-    if (!Cut._isCut(parent)) {
-        throw "It is not a Cut node!";
-    }
+    Cut._ensure(parent);
     this.remove();
     if (parent._first) {
         parent._first._prev = this;
@@ -330,7 +383,7 @@ Cut.prototype.prependTo = function(parent) {
     if (!parent._last) {
         parent._last = this;
     }
-    this._parent._listenOn(this);
+    this._parent._flag(this, true);
     this._ts_parent = Cut._TS++;
     parent._ts_children = Cut._TS++;
     parent.touch();
@@ -340,9 +393,7 @@ Cut.prototype.prependTo = function(parent) {
 Cut.prototype.insertNext = function() {
     if (arguments.length) {
         for (var i = 0; i < arguments.length; i++) {
-            if (!Cut._isCut(arguments[i])) {
-                throw "It is not a Cut node!";
-            }
+            Cut._ensure(arguments[i]);
             arguments[i] && arguments[i].insertAfter(this);
         }
     }
@@ -352,9 +403,7 @@ Cut.prototype.insertNext = function() {
 Cut.prototype.insertPrev = function() {
     if (arguments.length) {
         for (var i = 0; i < arguments.length; i++) {
-            if (!Cut._isCut(arguments[i])) {
-                throw "It is not a Cut node!";
-            }
+            Cut._ensure(arguments[i]);
             arguments[i] && arguments[i].insertBefore(this);
         }
     }
@@ -362,12 +411,7 @@ Cut.prototype.insertPrev = function() {
 };
 
 Cut.prototype.insertBefore = function(next) {
-    if (!next) {
-        throw "Next is null!";
-    }
-    if (!Cut._isCut(next)) {
-        throw "It is not a Cut node!";
-    }
+    Cut._ensure(next);
     this.remove();
     var parent = next._parent;
     var prev = next._prev;
@@ -376,19 +420,14 @@ Cut.prototype.insertBefore = function(next) {
     this._parent = parent;
     this._prev = prev;
     this._next = next;
-    this._parent._listenOn(this);
+    this._parent._flag(this, true);
     this._ts_parent = Cut._TS++;
     this.touch();
     return this;
 };
 
 Cut.prototype.insertAfter = function(prev) {
-    if (!prev) {
-        throw "Prev is null!";
-    }
-    if (!Cut._isCut(prev)) {
-        throw "It is not a Cut node!";
-    }
+    Cut._ensure(prev);
     this.remove();
     var parent = prev._parent;
     var next = prev._next;
@@ -397,7 +436,7 @@ Cut.prototype.insertAfter = function(prev) {
     this._parent = parent;
     this._prev = prev;
     this._next = next;
-    this._parent._listenOn(this);
+    this._parent._flag(this, true);
     this._ts_parent = Cut._TS++;
     this.touch();
     return this;
@@ -406,9 +445,7 @@ Cut.prototype.insertAfter = function(prev) {
 Cut.prototype.remove = function() {
     if (arguments.length) {
         for (var i = 0; i < arguments.length; i++) {
-            if (!Cut._isCut(arguments[i])) {
-                throw "It is not a Cut node!";
-            }
+            Cut._ensure(arguments[i]);
             arguments[i] && arguments[i].remove();
         }
         return this;
@@ -426,7 +463,7 @@ Cut.prototype.remove = function() {
         if (this._parent._last === this) {
             this._parent._last = this._prev;
         }
-        this._parent._listenOff(this);
+        this._parent._flag(this, false);
         this._parent._ts_children = Cut._TS++;
         this._parent.touch();
     }
@@ -441,7 +478,7 @@ Cut.prototype.empty = function() {
     while (child = next) {
         next = child._next;
         child._prev = child._next = child._parent = null;
-        this._listenOff(child);
+        this._flag(child, false);
     }
     this._first = this._last = null;
     this._ts_children = Cut._TS++;
@@ -449,44 +486,35 @@ Cut.prototype.empty = function() {
     return this;
 };
 
-Cut.prototype._listenOn = function(obj) {
+// Deep flags used for optimizing event distribution.
+Cut.prototype._flag = function(obj, on) {
+    if (typeof on === "undefined") {
+        return this._flags !== null && this._flags[obj] || 0;
+    }
     if (typeof obj === "string") {
-        this._listenersCount = this._listenersCount || {};
-        if (!this._listenersCount[obj] && this._parent) {
-            this._parent._listenOn(obj);
+        if (on) {
+            this._flags = this._flags || {};
+            if (!this._flags[obj] && this._parent) {
+                this._parent._flag(obj, true);
+            }
+            this._flags[obj] = (this._flags[obj] || 0) + 1;
+        } else if (this._flags && this._flags[obj] > 0) {
+            if (this._flags[obj] == 1 && this._parent) {
+                this._parent._flag(obj, false);
+            }
+            this._flags[obj] = this._flags[obj] - 1;
         }
-        this._listenersCount[obj] = (this._listenersCount[obj] || 0) + 1;
-    } else if (typeof obj === "object") {
-        if (obj._listenersCount) {
-            for (var type in obj._listenersCount) {
-                if (obj._listenersCount[type] > 0) {
-                    this._listenOn(type);
+    }
+    if (typeof obj === "object") {
+        if (obj._flags) {
+            for (var type in obj._flags) {
+                if (obj._flags[type] > 0) {
+                    this._flag(type, on);
                 }
             }
         }
     }
-};
-
-Cut.prototype._listenOff = function(obj) {
-    if (typeof obj === "string") {
-        this._listenersCount = this._listenersCount || {};
-        if (this._listenersCount[obj] == 1 && this._parent) {
-            this._parent._listenOff(obj);
-        }
-        this._listenersCount[obj] = Math.max((this._listenersCount[obj] || 0) - 1, 0);
-    } else if (typeof obj === "object") {
-        if (obj._listenersCount) {
-            for (var type in obj._listenersCount) {
-                if (obj._listenersCount[type] > 0) {
-                    this._listenOff(type);
-                }
-            }
-        }
-    }
-};
-
-Cut.prototype._listens = function(type) {
-    return this._listenersCount && this._listenersCount[type] || 0;
+    return this;
 };
 
 Cut.prototype.touch = function() {
@@ -495,237 +523,51 @@ Cut.prototype.touch = function() {
     return this;
 };
 
-Cut.prototype.pin = function() {
-    if (!arguments.length) {
+Cut.prototype.pin = function(a, b) {
+    if (typeof a === "object") {
+        this._pin.set(a);
+        return this;
+    } else if (typeof a === "string") {
+        if (typeof b === "undefined") {
+            return this._pin.get(a);
+        } else {
+            this._pin.set(a, b);
+            return this;
+        }
+    } else if (typeof a === "undefined") {
         return this._pin;
     }
-    var obj = this._pin.update.apply(this._pin, arguments);
-    return obj === this._pin ? this : obj;
 };
 
 Cut.prototype.matrix = function() {
     return this._pin.absoluteMatrix(this, this._parent ? this._parent._pin : null);
 };
 
-Cut.prototype.tween = function(duration, delay) {
-    return (this._tween || (this._tween = new Cut.Tween(this))).tween(duration, delay);
-};
-
-Cut.Tween = function(cut) {
-    var tween = this;
-    this._owner = cut;
-    this._queue = [];
-    this._next = null;
-    cut.tick(function(elapsed) {
-        if (!tween._queue.length) {
-            return;
-        }
-        this.touch();
-        var head = tween._queue[0];
-        if (!head.time) {
-            head.time = 1;
-        } else {
-            head.time += elapsed;
-        }
-        if (head.time < head.delay) {
-            return;
-        }
-        if (!head.start) {
-            head.start = {};
-            head.keys = {};
-            for (var key in head.end) {
-                if (typeof (start = cut.pin(key)) === "number") {
-                    head.start[key] = start;
-                    head.keys[key] = key;
-                } else if (typeof (startX = cut.pin(key + "X")) === "number" && typeof (startY = cut.pin(key + "Y")) === "number") {
-                    head.start[key + "X"] = startX;
-                    head.keys[key + "X"] = key;
-                    head.start[key + "Y"] = startY;
-                    head.keys[key + "Y"] = key;
-                }
-            }
-        }
-        var p = (head.time - head.delay) / head.duration;
-        var over = p >= 1;
-        p = p > 1 ? 1 : p;
-        p = typeof head.easing == "function" ? head.easing(p) : p;
-        var q = 1 - p;
-        for (var key in head.keys) {
-            cut.pin(key, head.start[key] * q + head.end[head.keys[key]] * p);
-        }
-        if (over) {
-            tween._queue.shift();
-            head.then && head.then.call(cut);
-        }
-    }, true);
-};
-
-Cut.Tween.prototype.tween = function(duration, delay) {
-    this._next = {
-        id: Cut._TS++,
-        end: {},
-        duration: duration || 400,
-        delay: delay || 0
-    };
-    return this;
-};
-
-Cut.Tween.prototype.pin = function(pin) {
-    if (this._next !== this._queue[this._queue.length - 1]) {
-        this._owner.touch();
-        this._queue.push(this._next);
-    }
-    var end = this._next.end;
-    if (arguments.length === 1) {
-        Cut._extend(end, arguments[0]);
-    } else if (arguments.length === 2) {
-        end[arguments[0]] = arguments[1];
-    }
-    return this;
-};
-
-Cut.Tween.prototype.clear = function(forward) {
-    var tween;
-    while (tween = this._queue.shift()) {
-        forward && this._owner.pin(tween.end);
-    }
-    return this;
-};
-
-Cut.Tween.prototype.then = function(then) {
-    this._next.then = then;
-    return this;
-};
-
-Cut.Tween.prototype.ease = function(easing) {
-    this._next.easing = Cut.Easing(easing);
-    return this;
-};
-
-Cut.root = function(request, render) {
-    return new Cut.Root(request, render);
-};
-
-Cut.Root = function(request, render) {
-    Cut.String.prototype._super.apply(this, arguments);
-    this._paused = true;
-    this._render = render;
-    this._request = request;
-    var self = this;
-    var requestCallback = function() {
-        if (self._paused === true) {
-            return;
-        }
-        self._mo_touch = self._ts_touch;
-        self._render();
-        self.request();
-        self._mo_touch == self._ts_touch && self.pause();
-    };
-    this.request = function() {
-        this._request.call(null, requestCallback);
-    };
-    this.on("viewport", function(viewport) {
-        this._size = {
-            width: viewport.width,
-            height: viewport.height
-        };
-        this._updateViewbox();
-        return true;
-    });
-};
-
-Cut.Root.prototype = Cut._create(Cut.prototype);
-
-Cut.Root.prototype._super = Cut;
-
-Cut.Root.prototype.constructor = Cut.Root;
-
-Cut.Root.prototype.viewbox = function(width, height, mode) {
-    this._viewbox = {
-        width: width,
-        height: height,
-        mode: /^(in|out)$/.test(mode) ? mode : "in"
-    };
-    this._updateViewbox();
-    return this;
-};
-
-Cut.Root.prototype._updateViewbox = function() {
-    var viewbox = this._viewbox;
-    var size = this._size;
-    if (!size) {} else if (viewbox) {
-        this.pin({
-            width: viewbox.width,
-            height: viewbox.height,
-            resizeMode: viewbox.mode,
-            resizeWidth: size.width,
-            resizeHeight: size.height
-        });
-    } else {
-        this.pin({
-            width: size.width,
-            height: size.height
-        });
-    }
-};
-
-Cut.Root.prototype.start = function() {
-    return this.resume();
-};
-
-Cut.Root.prototype.resume = function(force) {
-    if (this._paused || force) {
-        this._paused = false;
-        this.request();
-    }
-    return this;
-};
-
-Cut.Root.prototype.pause = function() {
-    this._paused = true;
-    return this;
-};
-
-Cut.Root.prototype.touch = function() {
-    this.resume();
-    return Cut.prototype.touch.apply(this, arguments);
-};
-
-Cut.Root.prototype.resize = function(width, height, ratio) {
-    this._ratio = ratio || 1;
-    var data = {};
-    data.width = width;
-    data.height = height;
-    data.ratio = ratio;
-    this.visit({
-        start: function(cut) {
-            if (!cut._listens("viewport")) {
-                return true;
-            }
-            cut.publish("viewport", [ data ]);
-        }
-    });
-    return this;
-};
-
 Cut.image = function(cutout) {
     var image = new Cut.Image();
-    cutout && image.setImage(cutout);
+    cutout && image.image(cutout);
     return image;
 };
 
 Cut.Image = function() {
-    Cut.Image.prototype._super.apply(this, arguments);
+    Cut.Image._super.call(this);
 };
 
-Cut.Image.prototype = Cut._create(Cut.prototype);
+Cut.Image._super = Cut;
 
-Cut.Image.prototype._super = Cut;
+Cut.Image.prototype = Cut._create(Cut.Image._super.prototype);
 
 Cut.Image.prototype.constructor = Cut.Image;
 
-Cut.Image.prototype.setImage = function(cutout) {
-    this._cutouts[0] = Cut.Out.select(cutout);
+/**
+ * @deprecated Use image
+ */
+Cut.Image.prototype.setImage = function(a, b, c) {
+    return this.image(a, b, c);
+};
+
+Cut.Image.prototype.image = function(cutout) {
+    this._cutouts[0] = Cut.cutout(cutout);
     this._cutouts.length = 1;
     this.pin({
         width: this._cutouts[0] ? this._cutouts[0].dWidth() : 0,
@@ -736,11 +578,11 @@ Cut.Image.prototype.setImage = function(cutout) {
 };
 
 Cut.Image.prototype.cropX = function(w, x) {
-    return this.setImage(this._cutouts[0].cropX(w, x));
+    return this.image(this._cutouts[0].cropX(w, x));
 };
 
 Cut.Image.prototype.cropY = function(h, y) {
-    return this.setImage(this._cutouts[0].cropY(h, y));
+    return this.image(this._cutouts[0].cropY(h, y));
 };
 
 Cut.Image.prototype._slice = function(i) {
@@ -875,46 +717,56 @@ Cut.Image.prototype.stretch = function(inner) {
 };
 
 Cut.anim = function(frames, fps) {
-    var anim = new Cut.Anim().setFrames(frames).gotoFrame(0);
+    var anim = new Cut.Anim().frames(frames).gotoFrame(0);
     fps && anim.fps(fps);
     return anim;
 };
 
 Cut.Anim = function() {
-    Cut.Anim.prototype._super.apply(this, arguments);
+    Cut.Anim._super.call(this);
     this._fps = Cut.Anim.FPS;
     this._ft = 1e3 / this._fps;
-    this._time = 0;
+    this._time = -1;
+    this._repeat = 0;
     this._frame = 0;
     this._frames = [];
     this._labels = {};
-    this.tick(function() {
-        if (this._time && this._frames.length > 1) {
-            var t = Cut._now() - this._time;
-            if (t >= this._ft) {
-                var n = t < 2 * this._ft ? 1 : Math.floor(t / this._ft);
-                this._time += n * this._ft;
-                this.moveFrame(n);
-                if (this._repeat && (this._repeat -= n) <= 0) {
-                    this.stop();
-                    this._callback && this._callback();
-                }
-            }
-            this.touch();
+    var lastTime = 0;
+    this.tick(function(t, now, last) {
+        if (this._time < 0 || this._frames.length <= 1) {
+            return;
+        }
+        // ignore old elapsed
+        var ignore = lastTime != last;
+        lastTime = now;
+        this.touch();
+        if (ignore) {
+            return;
+        }
+        this._time += t;
+        if (this._time < this._ft) {
+            return;
+        }
+        var n = this._time / this._ft | 0;
+        this._time -= n * this._ft;
+        this.moveFrame(n);
+        if (this._repeat > 0 && (this._repeat -= n) <= 0) {
+            this.stop();
+            this._callback && this._callback();
         }
     }, false);
 };
 
-Cut.Anim.prototype = Cut._create(Cut.prototype);
+Cut.Anim._super = Cut;
 
-Cut.Anim.prototype._super = Cut;
+Cut.Anim.prototype = Cut._create(Cut.Anim._super.prototype);
 
 Cut.Anim.prototype.constructor = Cut.Anim;
 
 Cut.Anim.FPS = 22;
 
 Cut.Anim.prototype.fps = function(fps) {
-    if (!arguments.length) {
+    if (typeof fps === "undefined") {
         return this._fps;
     }
     this._fps = fps || Cut.Anim.FPS;
@@ -922,12 +774,18 @@ Cut.Anim.prototype.fps = function(fps) {
     return this;
 };
 
-Cut.Anim.prototype.setFrames = function(frames) {
-    this._time = this._time || 0;
+/**
+ * @deprecated Use frames
+ */
+Cut.Anim.prototype.setFrames = function(a, b, c) {
+    return this.frames(a, b, c);
+};
+
+Cut.Anim.prototype.frames = function(frames) {
     this._frame = 0;
     this._frames = [];
     this._labels = {};
-    frames = Cut.Out.select(frames, true);
+    frames = Cut.cutout(frames, true);
     if (frames && frames.length) {
         for (var i = 0; i < frames.length; i++) {
             var cutout = frames[i];
@@ -948,6 +806,7 @@ Cut.Anim.prototype.gotoFrame = function(frame, resize) {
     resize = resize || !this._cutouts[0];
     this._cutouts[0] = this._frames[this._frame];
     if (resize) {
+        // TODO: don't create object
         this.pin({
             width: this._cutouts[0].dWidth(),
             height: this._cutouts[0].dHeight()
@@ -974,60 +833,75 @@ Cut.Anim.prototype.repeat = function(repeat, callback) {
 };
 
 Cut.Anim.prototype.play = function(frame) {
-    if (arguments.length) {
+    if (typeof frame !== "undefined") {
         this.gotoFrame(frame);
-        this._time = Cut._now();
-    } else if (!this._time) {
-        this._time = Cut._now();
+        this._time = 0;
+    } else if (this._time < 0) {
+        this._time = 0;
     }
+    this.touch();
     return this;
 };
 
 Cut.Anim.prototype.stop = function(frame) {
-    this._time = null;
-    if (arguments.length) {
+    this._time = -1;
+    if (typeof frame !== "undefined") {
         this.gotoFrame(frame);
     }
     return this;
 };
 
-Cut.string = function(font) {
-    return new Cut.String().setFont(font);
+Cut.string = function(frames) {
+    return new Cut.String().frames(frames);
 };
 
 Cut.String = function() {
-    Cut.String.prototype._super.apply(this, arguments);
+    Cut.String._super.call(this);
     this.row();
 };
 
-Cut.String.prototype = Cut._create(Cut.prototype);
+Cut.String._super = Cut;
 
-Cut.String.prototype._super = Cut;
+Cut.String.prototype = Cut._create(Cut.String._super.prototype);
 
 Cut.String.prototype.constructor = Cut.String;
 
-Cut.String.prototype.setFont = function(font) {
-    if (typeof font == "string") {
-        this._font = function(value) {
-            return font + value;
+/**
+ * @deprecated Use frames
+ */
+Cut.String.prototype.setFont = function(a, b, c) {
+    return this.frames(a, b, c);
+};
+
+Cut.String.prototype.frames = function(frames) {
+    if (typeof frames == "string") {
+        this._frames = function(value) {
+            return frames + value;
         };
-    } else if (Cut._isFunc(font)) {
-        this._font = font;
+    } else if (typeof frames === "function") {
+        this._frames = frames;
     }
     return this;
 };
 
-Cut.String.prototype.setValue = function(value) {
-    if (this.value === value) return this;
-    this.value = value;
+/**
+ * @deprecated Use value
+ */
+Cut.String.prototype.setValue = function(a, b, c) {
+    return this.value(a, b, c);
+};
+
+Cut.String.prototype.value = function(value) {
+    if (this._value === value) return this;
+    this._value = value;
     if (typeof value !== "string" && !Cut._isArray(value)) {
         value = value + "";
     }
     var child = this._first;
     for (var i = 0; i < value.length; i++) {
-        var selector = this._font(value[i]);
+        var selector = this._frames(value[i]);
         if (child) {
-            child.setImage(selector).show();
+            child.image(selector).show();
         } else {
             child = Cut.image(selector).appendTo(this);
         }
@@ -1063,6 +937,8 @@ Cut.sequence = function(type, align) {
 };
 
 Cut.prototype.sequence = function(type, align) {
+    this._padding = this._padding || 0;
+    this._spacing = this._spacing || 0;
     this.untick(this._layoutTicker);
     this._layoutTicker = function() {
         if (this._mo_seq == this._ts_touch) {
@@ -1080,13 +956,13 @@ Cut.prototype.sequence = function(type, align) {
             var w = child._pin._boxWidth;
             var h = child._pin._boxHeight;
             if (type == "column") {
-                !first && (height += this._spacing || 0);
+                !first && (height += this._spacing);
                 child.pin("offsetY") != height && child.pin("offsetY", height);
                 width = Math.max(width, w);
                 height = height + h;
                 alignChildren && child.pin("alignX", align);
             } else if (type == "row") {
-                !first && (width += this._spacing || 0);
+                !first && (width += this._spacing);
                 child.pin("offsetX") != width && child.pin("offsetX", width);
                 width = width + w;
                 height = Math.max(height, h);
@@ -1094,8 +970,8 @@ Cut.prototype.sequence = function(type, align) {
             }
             first = false;
         }
-        width += 2 * this._padding || 0;
-        height += 2 * this._padding || 0;
+        width += 2 * this._padding;
+        height += 2 * this._padding;
         this.pin("width") != width && this.pin("width", width);
         this.pin("height") != height && this.pin("height", height);
     };
@@ -1109,6 +985,7 @@ Cut.box = function() {
 
 Cut.prototype.box = function() {
     if (this._boxTicker) return this;
+    this._padding = this._padding || 0;
     this._boxTicker = function() {
         if (this._mo_box == this._ts_touch) {
             return;
@@ -1124,8 +1001,8 @@ Cut.prototype.box = function() {
             width = Math.max(width, w);
             height = Math.max(height, h);
         }
-        width += 2 * this._padding || 0;
-        height += 2 * this._padding || 0;
+        width += 2 * this._padding;
+        height += 2 * this._padding;
         this.pin("width") != width && this.pin("width", width);
         this.pin("height") != height && this.pin("height", height);
     };
@@ -1143,185 +1020,318 @@ Cut.prototype.spacing = function(space) {
     return this;
 };
 
-// TODO use prototype
-Cut.Loader = function() {
-    var queue = [];
-    var roots = [];
-    var images = {};
-    var started = false;
-    function loadImages(loader, callback) {
-        var loading = 0;
-        var noimage = true;
-        var textures = Cut.Texture._list;
-        for (var texture in textures) {
-            if (textures[texture].getImagePath()) {
-                loading++;
-                var src = textures[texture].getImagePath();
-                var image = loader(src, complete, error);
-                Cut.Loader.addImage(image, src);
-                noimage = false;
-            }
-        }
-        if (noimage) {
-            DEBUG && console.log("No image to load.");
-            callback && callback();
-        }
-        function complete() {
-            DEBUG && console.log("Image loaded.");
-            done();
-        }
-        function error(msg) {
-            DEBUG && console.log("Error loading image: " + msg);
-            done();
-        }
-        function done() {
-            if (--loading <= 0) {
-                callback && callback();
-            }
-        }
-    }
-    return {
-        load: function(app, configs) {
-            if (!started) {
-                queue.push(arguments);
-                return;
-            }
-            DEBUG && console.log("Init...");
-            var root = this.init(function(root, canvas) {
-                DEBUG && console.log("Loading app...");
-                app(root, canvas);
-            }, configs);
-            roots.push(root);
-            DEBUG && console.log("Loading images...");
-            loadImages(this.loadImage, function() {
-                DEBUG && console.log("Images loaded.");
-                DEBUG && console.log("Start playing...");
-                root.start();
-            });
-        },
-        start: function() {
-            started = true;
-            var args;
-            while (args = queue.shift()) {
-                this.load.apply(this, args);
-            }
-        },
-        pause: function() {
-            for (var i = queue.length - 1; i >= 0; i--) {
-                roots[i].pause();
-            }
-        },
-        resume: function() {
-            for (var i = queue.length - 1; i >= 0; i--) {
-                roots[i].resume();
-            }
-        },
-        getImage: function(src) {
-            return images[src];
-        },
-        addImage: function(image, src) {
-            images[src] = image;
-            return this;
-        }
-    };
-}();
+Cut._config = {};
 
-// TODO use prototype
-Cut.Texture = function(texture) {
-    texture.cutouts = texture.cutouts || [];
-    var selectionCache = {};
-    var imageCache = null;
-    this.getImagePath = function() {
-        return texture.imagePath;
+Cut.config = function() {
+    if (arguments.length === 1 && typeof arguments[0] === "string") {
+        return Cut._config[arguments[0]];
+    }
+    if (arguments.length === 1 && typeof arguments[0] === "object") {
+        Cut._extend(Cut._config, arguments[0]);
+    }
+    if (arguments.length === 2 && typeof arguments[0] === "string") {
+        Cut._config[(arguments[0], arguments[1])];
+    }
+};
+
+Cut.start = function(config) {
+    DEBUG && console.log("Starting...");
+    config = Cut._extend({}, Cut._config, config);
+    Cut.Texture.start(config["image-loader"], function() {
+        Cut.Root.start(config["app-loader"]);
+    });
+};
+
+Cut.pause = function() {
+    Cut.Root.pause();
+};
+
+Cut.resume = function() {
+    Cut.Root.resume();
+};
+
+Cut.cutout = function(selector, prefix) {
+    return Cut.Texture.select(selector, prefix);
+};
+
+Cut.Root = function(request, render) {
+    Cut.Root._super.call(this);
+    this._paused = true;
+    this._render = render;
+    var self = this;
+    var requestCallback = function() {
+        if (self._paused === true) {
+            return;
+        }
+        self._mo_touch = self._ts_touch;
+        self._render();
+        self.request();
+        self._mo_touch == self._ts_touch && self.pause();
     };
-    function image() {
-        if (!imageCache) {
-            imageCache = Cut.Loader.getImage(texture.imagePath);
-        }
-        return imageCache;
+    this.request = function() {
+        request(requestCallback);
+    };
+};
+
+Cut.Root._super = Cut;
+
+Cut.Root.prototype = Cut._create(Cut.Root._super.prototype);
+
+Cut.Root.prototype.constructor = Cut.Root;
+
+Cut.Root.prototype.start = function() {
+    return this.resume();
+};
+
+Cut.Root.prototype.resume = function(force) {
+    if (this._paused || force) {
+        this._paused = false;
+        this.request();
     }
-    for (var i = 0; i < texture.cutouts.length; i++) {
-        map(texture.cutouts[i]);
+    return this;
+};
+
+Cut.Root.prototype.pause = function() {
+    this._paused = true;
+    return this;
+};
+
+Cut.Root.prototype.touch = function() {
+    this.resume();
+    return Cut.Root._super.prototype.touch.call(this);
+};
+
+Cut.Root.prototype.render = function(context) {
+    Cut._stats.tick = Cut._stats.paint = Cut._stats.paste = 0;
+    var now = Cut._now();
+    var last = this._lastTime || now;
+    var elapsed = now - last;
+    this._lastTime = now;
+    this._tick(elapsed, now, last);
+    this._paint(context);
+    Cut._stats.fps = 1e3 / (Cut._now() - now);
+};
+
+Cut.Root.prototype.viewport = function(width, height, ratio) {
+    if (typeof width === "undefined") {
+        return Cut._extend({}, this._viewport);
     }
-    function map(cutout) {
-        if (!cutout || cutout.isCutout) {
-            return cutout;
+    this._viewport = {
+        width: width,
+        height: height,
+        ratio: ratio || 1
+    };
+    this._updateViewbox();
+    var data = Cut._extend({}, this._viewport);
+    this.visit({
+        start: function(cut) {
+            if (!cut._flag("viewport")) {
+                return true;
+            }
+            cut.publish("viewport", [ data ]);
         }
-        if (typeof texture.map === "function") {
-            cutout = texture.map(cutout);
-        } else if (typeof texture.filter === "function") {
-            cutout = texture.filter(cutout);
-        }
-        var ratio = texture.ratio || 1;
-        if (ratio != 1) {
-            cutout.x *= ratio, cutout.y *= ratio;
-            cutout.width *= ratio, cutout.height *= ratio;
-            cutout.top *= ratio, cutout.bottom *= ratio;
-            cutout.left *= ratio, cutout.right *= ratio;
-        }
-        var trim = texture.trim || 0;
-        if (trim) {
-            cutout.x += trim, cutout.y += trim;
-            cutout.width -= 2 * trim, cutout.height -= 2 * trim;
-            cutout.top -= trim, cutout.bottom -= trim;
-            cutout.left -= trim, cutout.right -= trim;
-        }
+    });
+    return this;
+};
+
+Cut.Root.prototype.viewbox = function(width, height, mode) {
+    this._viewbox = {
+        width: width,
+        height: height,
+        mode: /^(in|out)$/.test(mode) ? mode : "in"
+    };
+    this._updateViewbox();
+    return this;
+};
+
+Cut.Root.prototype._updateViewbox = function() {
+    var box = this._viewbox;
+    var size = this._viewport;
+    if (size && box) {
+        this.pin({
+            width: box.width,
+            height: box.height
+        }).pin({
+            resizeMode: box.mode,
+            resizeWidth: size.width,
+            resizeHeight: size.height
+        });
+    } else if (size) {
+        this.pin({
+            width: size.width,
+            height: size.height
+        });
+    }
+};
+
+Cut.Root._queue = [];
+
+Cut.Root._roots = [];
+
+Cut.Root._loader = null;
+
+Cut.Root.add = function(app, opts) {
+    if (!this._loader) {
+        this._queue.push(arguments);
+        return;
+    }
+    DEBUG && console.log("Init app...");
+    var root = this._loader(function(root, canvas) {
+        DEBUG && console.log("Loading app...");
+        app(root, canvas);
+    }, opts);
+    this._roots.push(root);
+    root.start();
+};
+
+Cut.Root.start = function(loader) {
+    DEBUG && console.log("Loading apps...");
+    this._loader = loader;
+    var args;
+    while (args = this._queue.shift()) {
+        this.add.apply(this, args);
+    }
+};
+
+Cut.Root.pause = function() {
+    for (var i = this._queue.length - 1; i >= 0; i--) {
+        this._roots[i].pause();
+    }
+};
+
+Cut.Root.resume = function() {
+    for (var i = this._queue.length - 1; i >= 0; i--) {
+        this._roots[i].resume();
+    }
+};
+
+Cut.Texture = function(data) {
+    this.isTexture = true;
+    this._name = data.name;
+    this._imagePath = data.imagePath;
+    this._imageRatio = data.imageRatio || 1;
+    this._cutouts = data.cutouts || [];
+    this._factory = data.factory;
+    this._map = data.filter || data.map;
+    this._ratio = data.ratio || 1;
+    this._trim = data.trim || 0;
+};
+
+Cut.Texture.prototype._wrap = function(cutout) {
+    if (!cutout || cutout.isCutout) {
         return cutout;
     }
-    function wrap(cutout) {
-        if (!cutout.isCutout) {
-            cutout = new Cut.Out(cutout, image, texture.imageRatio);
-        }
-        return cutout;
+    cutout = Cut._extend({}, cutout);
+    if (typeof this._map === "function") {
+        cutout = this._map(cutout);
     }
-    this.select = function(selector, prefix) {
-        if (!prefix) {
-            // one
-            var id = selector + "?";
-            var result = selectionCache[id];
-            if (typeof result === "undefined") {
-                for (var i = 0; i < texture.cutouts.length; i++) {
-                    var item = texture.cutouts[i];
-                    var name = item._name || item.name;
-                    if (name == selector) {
-                        result = item;
-                        break;
-                    }
-                }
-                if (!result && texture.factory) {
-                    result = map(texture.factory(selector));
-                }
-                selectionCache[id] = result;
+    var ratio = this._ratio;
+    if (ratio != 1) {
+        cutout.x *= ratio, cutout.y *= ratio;
+        cutout.width *= ratio, cutout.height *= ratio;
+        cutout.top *= ratio, cutout.bottom *= ratio;
+        cutout.left *= ratio, cutout.right *= ratio;
+    }
+    var trim = this._trim;
+    if (trim) {
+        cutout.x += trim, cutout.y += trim;
+        cutout.width -= 2 * trim, cutout.height -= 2 * trim;
+        cutout.top -= trim, cutout.bottom -= trim;
+        cutout.left -= trim, cutout.right -= trim;
+    }
+    var self = this;
+    cutout = new Cut.Out(cutout, function() {
+        // do not query image until playing
+        return Cut.Texture._images[self._imagePath];
+    }, this._imageRatio);
+    return cutout;
+};
+
+Cut.Texture.prototype.select = function(selector, prefix) {
+    if (!prefix) {
+        // one
+        for (var i = 0; i < this._cutouts.length; i++) {
+            var cutout = this._cutouts[i];
+            var name = cutout._name || cutout.name;
+            if (name == selector) {
+                return this._wrap(cutout);
             }
-            if (!result) {
-                throw "Cutout not found: '" + texture.name + ":" + selector + "'";
+        }
+        if (this._factory) {
+            return this._wrap(this._factory(selector));
+        }
+    } else {
+        // many
+        var results = [];
+        var length = selector.length;
+        for (var i = 0; i < this._cutouts.length; i++) {
+            var cutout = this._cutouts[i];
+            var name = cutout._name || cutout.name;
+            if (name && name.substring(0, length) == selector) {
+                results.push(this._wrap(cutout));
             }
-            return wrap(result);
-        } else {
-            // many
-            var id = selector + "*";
-            var results = selectionCache[id];
-            if (typeof results === "undefined") {
-                results = [];
-                var length = selector.length;
-                for (var i = 0; i < texture.cutouts.length; i++) {
-                    var item = texture.cutouts[i];
-                    var name = item._name || item.name;
-                    if (name && name.substring(0, length) == selector) {
-                        results.push(texture.cutouts[i]);
-                    }
-                }
-                selectionCache[id] = results;
-            }
-            if (!results.length) {
-                throw "Cutouts not found: '" + texture.name + ":" + selector + "'";
-            }
-            for (var i = 0; i < results.length; i++) {
-                results[i] = wrap(results[i]);
-            }
+        }
+        if (results.length) {
             return results;
         }
-    };
+    }
+};
+
+// TODO: invalidate cache on new texture, etc.
+Cut.Texture._cache = {
+    one: {},
+    many: {}
+};
+
+Cut.Texture.select = function(selector, prefix) {
+    if (typeof selector === "function") {
+        return Cut.Texture.select(selector(), prefix);
+    }
+    if (typeof selector !== "string") {
+        return selector;
+    }
+    var i = selector.indexOf(":");
+    var tname = i < 1 ? null : selector.slice(0, i);
+    var cname = i < 0 ? selector : selector.slice(i + 1);
+    var cache = prefix ? Cut.Texture._cache.many : Cut.Texture._cache.one;
+    var result = cache[selector];
+    if (result) {
+        return result;
+    } else if (result === null) {
+        throw "Cutout not found: '" + selector + "'";
+    }
+    if (tname) {
+        var texture = Cut.Texture._list[tname];
+        if (texture) {
+            result = texture.select(cname, prefix);
+        } else {
+            throw "Texture not found: '" + selector + "'";
+        }
+    } else {
+        var list = Cut.Texture._list;
+        for (tname in list) {
+            if (list.hasOwnProperty(tname)) {
+                result = list[tname].select(cname, prefix);
+            }
+            if (result) {
+                break;
+            }
+        }
+    }
+    if (result) {
+        cache[selector] = result;
+        return result;
+    } else {
+        cache[selector] = null;
+        throw "Cutout not found: '" + selector + "'";
+    }
+};
+
+/**
+ * @deprecated Use `Cut(texture)` instead.
+ */
+Cut.addTexture = function() {
+    return Cut.Texture.add.apply(Cut.Texture, arguments);
 };
 
 Cut.Texture._list = {};
@@ -1329,21 +1339,54 @@ Cut.Texture._list = {};
 Cut.Texture.add = function() {
     for (var i = 0; i < arguments.length; i++) {
         var texture = arguments[i];
-        Cut.Texture._list[texture.name] = new Cut.Texture(texture);
+        texture = texture.isTexture ? texture : new Cut.Texture(texture);
+        Cut.Texture._list[texture._name] = texture;
     }
     return this;
 };
 
-/**
- * @deprecated Use Cut();
- */
-Cut.addTexture = function() {
-    return Cut.Texture.add.apply(Cut.Texture, arguments);
+Cut.Texture._images = {};
+
+Cut.Texture.start = function(loader, callback) {
+    DEBUG && console.log("Loading images...");
+    var loading = 0;
+    var noimage = true;
+    var textures = Cut.Texture._list;
+    for (var texture in textures) {
+        var path = textures[texture]._imagePath;
+        if (path) {
+            loading++;
+            Cut.Texture._images[path] = loader(path, complete, error);
+            noimage = false;
+        }
+    }
+    if (noimage) {
+        DEBUG && console.log("No image to load.");
+        callback && callback();
+    }
+    function complete() {
+        DEBUG && console.log("Image loaded.");
+        done();
+    }
+    function error(msg) {
+        DEBUG && console.log("Error loading image: " + msg);
+        done();
+    }
+    function done() {
+        if (--loading <= 0) {
+            DEBUG && console.log("Images loaded.");
+            callback && callback();
+        }
+    }
 };
 
 Cut.Out = function(def, image, ratio) {
     this.isCutout = true;
-    this._image = image;
+    if (typeof image === "function") {
+        this._imagefn = image;
+    } else {
+        this._image = image;
+    }
     this._ratio = ratio || 1;
     this._name = def.name;
     this._x = def.x;
@@ -1355,7 +1398,6 @@ Cut.Out = function(def, image, ratio) {
     this._left = def.left || 0;
     this._right = def.right || 0;
     this._reset();
-    return this;
 };
 
 Cut.Out.prototype._reset = function() {
@@ -1377,7 +1419,7 @@ Cut.Out.prototype.clone = function() {
 };
 
 Cut.Out.prototype.dWidth = function(width) {
-    if (arguments.length) {
+    if (typeof width !== "undefined") {
         this._dw = width;
         return this;
     }
@@ -1385,7 +1427,7 @@ Cut.Out.prototype.dWidth = function(width) {
 };
 
 Cut.Out.prototype.dHeight = function(height) {
-    if (arguments.length) {
+    if (typeof height !== "undefined") {
         this._dh = height;
         return this;
     }
@@ -1418,14 +1460,18 @@ Cut.Out.prototype.offset = function(x, y) {
 
 Cut.Out.prototype.paste = function(context) {
     Cut._stats.paste++;
-    var img = typeof this._image === "function" ? this._image() : this._image;
+    if (!this._image && this._imagefn) {
+        this._image = this._imagefn();
+    }
     try {
-        img && context.drawImage(img, // source
-        this._sx, this._sy, this._sw, this._sh, // cut
-        this._dx, this._dy, this._dw, this._dh);
+        if (this._image) {
+            context.drawImage(this._image, // source
+            this._sx, this._sy, this._sw, this._sh, // cut
+            this._dx, this._dy, this._dw, this._dh);
+        }
     } catch (e) {
         if (!this._failed) {
-            console.log("Unable to paste: " + this, img);
+            console.log("Unable to paste: " + this + " " + this._image);
             this._failed = true;
         }
     }
@@ -1433,27 +1479,6 @@ Cut.Out.prototype.paste = function(context) {
 
 Cut.Out.prototype.toString = function() {
     return "[" + this._name + ": " + this._sx + "x" + this._sy + "-" + this._sw + "x" + this._sh + "" + this._dx + "x" + this._dy + "-" + this._dw + "x" + this._dh + "]";
-};
-
-Cut.Out.select = function(selector, prefix) {
-    if (typeof selector === "function") {
-        return Cut.Out.select(selector());
-    }
-    if (typeof selector !== "string") {
-        return selector;
-    }
-    var i = selector.indexOf(":");
-    if (i < 0) {
-        throw "Invalid selector: '" + selector + "'";
-        return null;
-    }
-    var split = [ selector.slice(0, i), selector.slice(i + 1) ];
-    var texture = Cut.Texture._list[split[0]];
-    if (texture == null) {
-        throw "Texture not found: '" + selector + "'";
-        return !prefix ? null : [];
-    }
-    return texture.select(split[1], prefix);
 };
 
 Cut.drawing = function() {
@@ -1632,44 +1657,94 @@ Cut.Pin.prototype.relativeMatrix = function() {
 
 Cut.Pin._SINGLE = {};
 
-Cut.Pin.prototype.update = function() {
-    if (arguments.length == 1 && typeof arguments[0] === "string") {
-        return this["_" + arguments[0]];
+Cut.Pin.prototype.get = function(a) {
+    return Cut.Pin._getters[a] ? Cut.Pin._getters[a](this) : undefined;
+};
+
+Cut.Pin.prototype.set = function(a, b) {
+    var pin = Cut.Pin._SINGLE, key = null;
+    for (key in pin) delete pin[key];
+    if (typeof a === "string") {
+        pin[a] = b;
+    } else if (typeof a === "object") {
+        for (key in a) pin[key] = a[key];
     }
-    this._transform_flag = false;
-    this._translate_flag = false;
-    var pin = null, key = null, value = null;
-    if (arguments.length == 2 && typeof arguments[0] === "string") {
-        for (key in Cut.Pin._SINGLE) {
-            delete Cut.Pin._SINGLE[key];
+    for (key in pin) {
+        if (typeof pin[key] !== "undefined" && Cut.Pin._setters[key]) {
+            Cut.Pin._setters[key](this, pin[key], pin);
         }
-        (pin = Cut.Pin._SINGLE)[arguments[0]] = arguments[1];
-    } else if (arguments.length == 1 && typeof arguments[0] === "object") {
-        pin = arguments[0];
-    }
-    // TODO: map write only keys to read/write keys
-    if (pin) {
-        for (key in pin) {
-            if (typeof (value = pin[key]) !== "undefined") {
-                if (setter = Cut.Pin._setters[key]) {
-                    setter.call(Cut.Pin._setters, this, value, pin);
-                }
-            }
-        }
-    }
-    if (this._translate_flag) {
-        this._translate_flag = false;
-        this._ts_translate = Cut._TS++;
-    }
-    if (this._transform_flag) {
-        this._transform_flag = false;
-        this._ts_transform = Cut._TS++;
     }
     if (this._owner) {
         this._owner._ts_pin = Cut._TS++;
         this._owner.touch();
     }
     return this;
+};
+
+Cut.Pin._getters = {
+    alpha: function(pin) {
+        return pin._alpha;
+    },
+    textureAlpha: function(pin) {
+        return pin._textureAlpha;
+    },
+    width: function(pin) {
+        return pin._width;
+    },
+    height: function(pin) {
+        return pin._height;
+    },
+    // scale : function(pin) {
+    // },
+    scaleX: function(pin) {
+        return pin._scaleX;
+    },
+    scaleY: function(pin) {
+        return pin._scaleY;
+    },
+    // skew : function(pin) {
+    // },
+    skewX: function(pin) {
+        return pin._skewX;
+    },
+    skewY: function(pin) {
+        return pin._skewY;
+    },
+    rotation: function(pin) {
+        return pin._rotation;
+    },
+    // pivot : function(pin) {
+    // },
+    pivotX: function(pin) {
+        return pin._pivotX;
+    },
+    pivotY: function(pin) {
+        return pin._pivotY;
+    },
+    // offset : function(pin) {
+    // },
+    offsetX: function(pin) {
+        return pin._offsetX;
+    },
+    offsetY: function(pin) {
+        return pin._offsetY;
+    },
+    // align : function(pin) {
+    // },
+    alignX: function(pin) {
+        return pin._alignX;
+    },
+    alignY: function(pin) {
+        return pin._alignY;
+    },
+    // handle : function(pin) {
+    // },
+    handleX: function(pin) {
+        return pin._handleX;
+    },
+    handleY: function(pin) {
+        return pin._handleY;
+    }
 };
 
 Cut.Pin._setters = {
@@ -1682,86 +1757,86 @@ Cut.Pin._setters = {
     width: function(pin, value, set) {
         pin._width_ = value;
         pin._width = value;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     height: function(pin, value, set) {
         pin._height_ = value;
         pin._height = value;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     scale: function(pin, value, set) {
         pin._scaleX = value;
         pin._scaleY = value;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     scaleX: function(pin, value, set) {
         pin._scaleX = value;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     scaleY: function(pin, value, set) {
         pin._scaleY = value;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     skew: function(pin, value, set) {
         pin._skewX = value;
         pin._skewY = value;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     skewX: function(pin, value, set) {
         pin._skewX = value;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     skewY: function(pin, value, set) {
         pin._skewY = value;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     rotation: function(pin, value, set) {
         pin._rotation = value;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     pivot: function(pin, value, set) {
         pin._pivotX = value;
         pin._pivotY = value;
         pin._pivoted = true;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     pivotX: function(pin, value, set) {
         pin._pivotX = value;
         pin._pivoted = true;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     pivotY: function(pin, value, set) {
         pin._pivotY = value;
         pin._pivoted = true;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     offset: function(pin, value, set) {
         pin._offsetX = value;
         pin._offsetY = value;
-        pin._translate_flag = true;
+        pin._ts_translate = Cut._TS++;
     },
     offsetX: function(pin, value, set) {
         pin._offsetX = value;
-        pin._translate_flag = true;
+        pin._ts_translate = Cut._TS++;
     },
     offsetY: function(pin, value, set) {
         pin._offsetY = value;
-        pin._translate_flag = true;
+        pin._ts_translate = Cut._TS++;
     },
     align: function(pin, value, set) {
-        this.alignX.apply(this, arguments);
-        this.alignY.apply(this, arguments);
+        this.alignX(pin, value, set);
+        this.alignY(pin, value, set);
     },
     alignX: function(pin, value, set) {
         pin._alignX = value;
         pin._aligned = true;
-        pin._translate_flag = true;
+        pin._ts_translate = Cut._TS++;
         this.handleX(pin, value, set);
     },
     alignY: function(pin, value, set) {
         pin._alignY = value;
         pin._aligned = true;
-        pin._translate_flag = true;
+        pin._ts_translate = Cut._TS++;
         this.handleY(pin, value, set);
     },
     handle: function(pin, value, set) {
@@ -1771,15 +1846,15 @@ Cut.Pin._setters = {
     handleX: function(pin, value, set) {
         pin._handleX = value;
         pin._handled = true;
-        pin._translate_flag = true;
+        pin._ts_translate = Cut._TS++;
     },
     handleY: function(pin, value, set) {
         pin._handleY = value;
         pin._handled = true;
-        pin._translate_flag = true;
+        pin._ts_translate = Cut._TS++;
     },
     resizeMode: function(pin, value, set) {
-        if (Cut._isNum(set.resizeWidth) && Cut._isNum(set.resizeHeight)) {
+        if (typeof set.resizeWidth === "number" && typeof set.resizeHeight === "number") {
             this.resizeWidth(pin, set.resizeWidth, set, true);
             this.resizeHeight(pin, set.resizeHeight, set, true);
             if (value == "out") {
@@ -1797,7 +1872,7 @@ Cut.Pin._setters = {
         }
         pin._scaleX = value / pin._width_;
         pin._width = pin._width_;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     resizeHeight: function(pin, value, set, force) {
         if (set.resizeMode && !force) {
@@ -1805,10 +1880,10 @@ Cut.Pin._setters = {
         }
         pin._scaleY = value / pin._height_;
         pin._height = pin._height_;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     scaleMode: function(pin, value, set) {
-        if (Cut._isNum(set.scaleWidth) && Cut._isNum(set.scaleHeight)) {
+        if (typeof set.scaleWidth === "number" && typeof set.scaleHeight === "number") {
             this.scaleWidth(pin, set.scaleWidth, set, true);
             this.scaleHeight(pin, set.scaleHeight, set, true);
             if (value == "out") {
@@ -1823,14 +1898,14 @@ Cut.Pin._setters = {
             return;
         }
         pin._scaleX = value / pin._width_;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     scaleHeight: function(pin, value, set, force) {
         if (set.scaleMode && !force) {
             return;
         }
         pin._scaleY = value / pin._height_;
-        pin._transform_flag = true;
+        pin._ts_transform = Cut._TS++;
     },
     matrix: function(pin, value, set) {
         this.scaleX(pin, value.a, set);
@@ -2006,21 +2081,19 @@ Cut.Matrix.prototype.mapY = function(x, y) {
 Cut.Math = {};
 
 Cut.Math.random = function(min, max) {
-    if (arguments.length == 0) {
+    if (typeof min === "undefined") {
         max = 1, min = 0;
-    } else if (arguments.length == 1) {
+    } else if (typeof max === "undefined") {
         max = min, min = 0;
     }
-    if (min == max) {
-        return min;
-    }
-    return Math.random() * (max - min) + min;
+    return min == max ? min : Math.random() * (max - min) + min;
 };
 
 Cut.Math.rotate = function(num, min, max) {
-    if (arguments.length < 3) {
-        max = min || 0;
-        min = 0;
+    if (typeof min === "undefined") {
+        max = 1, min = 0;
+    } else if (typeof max === "undefined") {
+        max = min, min = 0;
     }
     if (max > min) {
         num = (num - min) % (max - min);
@@ -2035,146 +2108,74 @@ Cut.Math.length = function(x, y) {
     return Math.sqrt(x * x + y * y);
 };
 
-Cut._TS = 0;
+module.exports = Cut;
 
-Cut._isCut = function(obj) {
-    return obj instanceof Cut;
-};
 
-Cut._isNum = function(x) {
-    return typeof x === "number";
-};
+},{}],3:[function(require,module,exports){
+DEBUG = typeof DEBUG === "undefined" || DEBUG;
 
-Cut._isFunc = function(x) {
-    return typeof x === "function";
-};
-
-Cut._isArray = "isArray" in Array ? Array.isArray : function(value) {
-    return Object.prototype.toString.call(value) === "[object Array]";
-};
-
-Cut._extend = function(base, extension, attribs) {
-    if (attribs) {
-        for (var i = 0; i < attribs.length; i++) {
-            var attr = attribs[i];
-            base[attr] = extension[attr];
-        }
+function Easing(token) {
+    if (typeof token === "function") {
+        return token;
+    }
+    if (typeof token !== "string") {
+        return Easing._identity;
+    }
+    var fn = Easing._cache[token];
+    if (fn) {
+        return fn;
+    }
+    var match = /^(\w+)(-(in|out|in-out|out-in))?(\((.*)\))?$/i.exec(token);
+    if (!match || !match.length) {
+        return Easing._identity;
+    }
+    easing = Easing._easings[match[1]];
+    mode = Easing._modes[match[3]];
+    params = match[5];
+    if (easing && easing.fn) {
+        fn = easing.fn;
+    } else if (easing && easing.fc) {
+        fn = easing.fc.apply(easing.fc, params && params.replace(/\s+/, "").split(","));
     } else {
-        for (var attr in extension) {
-            base[attr] = extension[attr];
-        }
+        fn = Easing._identity;
     }
-    return base;
+    if (mode) {
+        fn = mode.fn(fn);
+    }
+    // TODO: It can be a memory leak with different `params`.
+    Easing._cache[token] = fn;
+    return fn;
+}
+
+Easing._identity = function(x) {
+    return x;
 };
 
-Cut._now = function() {
-    if (typeof performance !== "undefined" && performance.now) {
-        return function() {
-            return performance.now();
-        };
-    } else if (Date.now) {
-        return function() {
-            return Date.now();
-        };
-    } else {
-        return function() {
-            return +new Date();
-        };
-    }
-}();
+Easing._cache = {};
 
-Cut._function = function(value) {
-    return typeof value === "function" ? value : function() {
-        return value;
-    };
+Easing._modes = {};
+
+Easing._easings = {};
+
+Easing.add = function(data) {
+    var names = (data.name || data.mode).split(/\s+/);
+    for (var i = 0; i < names.length; i++) {
+        var name = names[i];
+        if (name) {
+            (data.name ? Easing._easings : Easing._modes)[name] = data;
+        }
+    }
 };
 
-Cut._options = function(options) {
-    options.get = function(name) {
-        return typeof this[name] == "function" ? this[name]() : this[name];
-    };
-    options.extend = function(obj) {
-        obj = typeof obj === "object" ? obj : {};
-        for (var name in this) {
-            obj[name] = name in obj ? obj[name] : this[name];
-        }
-        return obj;
-    };
-    options.mixin = function(obj) {
-        if (typeof obj === "object") {
-            for (var name in obj) {
-                this[name] = obj[name];
-            }
-        }
-        return this;
-    };
-    return options;
-};
-
-Cut._status = function(msg) {
-    if (!Cut._statusbox) {
-        var statusbox = Cut._statusbox = document.createElement("div");
-        statusbox.style.position = "absolute";
-        statusbox.style.color = "black";
-        statusbox.style.background = "white";
-        statusbox.style.zIndex = 999;
-        statusbox.style.top = "5px";
-        statusbox.style.right = "5px";
-        statusbox.style.padding = "1px 5px";
-        document.body.appendChild(statusbox);
-    }
-    Cut._statusbox.innerHTML = msg;
-};
-
-Cut.Easing = function() {
-    function identity(t) {
-        return t;
-    }
-    var easings = {}, modes = {};
-    function select(token) {
-        if (typeof token === "function") {
-            return token;
-        }
-        if (typeof token !== "string") {
-            return identity;
-        }
-        var match = /^(\w+)(-(in|out|in-out|out-in))?(\((.*)\))?$/i.exec(token);
-        if (!match || !match.length) {
-            return identity;
-        }
-        var name = match[1] || "", mode = match[3] || "in", params = match[5];
-        mode = modes[mode];
-        params = params ? params.replace(/\s+/, "").split(",") : [];
-        var easing = easings[name];
-        var fn = easing ? easing.fn || easing.fc.apply(easing.fc, params) : identity;
-        return mode ? mode(fn) : fn;
-    }
-    select.addMode = function(mode) {
-        var names = mode.name.split(/\s+/);
-        for (var i = 0; i < names.length; i++) {
-            names[i] && (modes[names[i]] = mode.fn);
-        }
-    };
-    select.add = function(easing) {
-        var names = easing.name.split(/\s+/);
-        for (var i = 0; i < names.length; i++) {
-            names[i] && (easings[names[i]] = easing);
-        }
-    };
-    return select;
-}();
-
-Cut.Easing.addMode({
-    name: "in",
+Easing.add({
+    mode: "in",
     fn: function(f) {
-        return function(t) {
-            return f(t);
-        };
+        return f;
     }
 });
 
-Cut.Easing.addMode({
-    name: "out",
+Easing.add({
+    mode: "out",
     fn: function(f) {
         return function(t) {
             return 1 - f(1 - t);
@@ -2182,8 +2183,8 @@ Cut.Easing.addMode({
     }
 });
 
-Cut.Easing.addMode({
-    name: "in-out",
+Easing.add({
+    mode: "in-out",
     fn: function(f) {
         return function(t) {
             return t < .5 ? f(2 * t) / 2 : 1 - f(2 * (1 - t)) / 2;
@@ -2191,8 +2192,8 @@ Cut.Easing.addMode({
     }
 });
 
-Cut.Easing.addMode({
-    name: "out-in",
+Easing.add({
+    mode: "out-in",
     fn: function(f) {
         return function(t) {
             return t < .5 ? 1 - f(2 * (1 - t)) / 2 : f(2 * t) / 2;
@@ -2200,70 +2201,70 @@ Cut.Easing.addMode({
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "linear",
     fn: function(t) {
         return t;
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "quad",
     fn: function(t) {
         return t * t;
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "cubic",
     fn: function(t) {
         return t * t * t;
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "quart",
     fn: function(t) {
         return t * t * t * t;
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "quint",
     fn: function(t) {
         return t * t * t * t * t;
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "sin sine",
     fn: function(t) {
         return 1 - Math.cos(t * Math.PI / 2);
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "exp",
     fn: function(t) {
         return t == 0 ? 0 : Math.pow(2, 10 * (t - 1));
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "circle circ",
     fn: function(t) {
         return 1 - Math.sqrt(1 - t * t);
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "bounce",
     fn: function(t) {
         return t < 1 / 2.75 ? 7.5625 * t * t : t < 2 / 2.75 ? 7.5625 * (t -= 1.5 / 2.75) * t + .75 : t < 2.5 / 2.75 ? 7.5625 * (t -= 2.25 / 2.75) * t + .9375 : 7.5625 * (t -= 2.625 / 2.75) * t + .984375;
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "poly",
     fc: function(e) {
         return function(t) {
@@ -2272,7 +2273,7 @@ Cut.Easing.add({
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "elastic",
     fc: function(a, p) {
         p = p || .45;
@@ -2284,33 +2285,36 @@ Cut.Easing.add({
     }
 });
 
-Cut.Easing.add({
+Easing.add({
     name: "back",
     fc: function(s) {
-        s = arguments.length ? s : 1.70158;
+        s = typeof s !== "undefined" ? s : 1.70158;
         return function(t) {
             return t * t * ((s + 1) * t - s);
         };
     }
 });
 
-if (typeof module !== "undefined") {
-    module.exports = Cut;
-}
+module.exports = Easing;
 
-if (typeof Cut === "undefined" && typeof require === "function") Cut = require("./cut-core");
 
-DEBUG = (typeof DEBUG === "undefined" || DEBUG) && console;
+},{}],4:[function(require,module,exports){
+var Cut = require("./core");
+
+DEBUG = typeof DEBUG === "undefined" || DEBUG;
 
 /**
  * Default loader for web.
  */
 window.addEventListener("load", function() {
     DEBUG && console.log("On load.");
-    Cut.Loader.start();
+    Cut.start({
+        "app-loader": AppLoader,
+        "image-loader": ImageLoader
+    });
 }, false);
 
-Cut.Loader.init = function(app, configs) {
+function AppLoader(app, configs) {
     configs = configs || {};
     var canvas = configs.canvas, context = null, full = false;
     var width = 0, height = 0, ratio = 1;
@@ -2336,7 +2340,7 @@ Cut.Loader.init = function(app, configs) {
         return window.setTimeout(callback, 1e3 / 60);
     };
     DEBUG && console.log("Creating root...");
-    var root = Cut.root(requestAnimationFrame, function() {
+    var root = new Cut.Root(requestAnimationFrame, function() {
         context.setTransform(1, 0, 0, 1, 0, 0);
         context.clearRect(0, 0, width, height);
         this.render(context);
@@ -2359,209 +2363,340 @@ Cut.Loader.init = function(app, configs) {
         canvas.width = width;
         canvas.height = height;
         DEBUG && console.log("Resize: " + width + " x " + height + " / " + ratio);
-        root.resize(width, height, ratio);
+        root.viewport(width, height, ratio);
     }
     return root;
-};
+}
 
-Cut.Loader.loadImage = function(src, handleComplete, handleError) {
+function ImageLoader(src, handleComplete, handleError) {
     var image = new Image();
     DEBUG && console.log("Loading image: " + src);
     image.onload = handleComplete;
     image.onerror = handleError;
     image.src = src;
     return image;
-};
+}
 
-if (typeof Cut === "undefined" && typeof require === "function") Cut = require("./cut-core");
 
-DEBUG = (typeof DEBUG === "undefined" || DEBUG) && console;
+},{"./core":2}],5:[function(require,module,exports){
+var Cut = require("./core");
 
-Cut.Mouse = function() {
-    Cut.Mouse.subscribe.apply(Cut.Mouse, arguments);
-};
+var Tween = require("./tween");
 
-Cut.Mouse.CLICK = "click";
+var Easing = require("./easing");
 
-Cut.Mouse.START = "touchstart mousedown";
-
-Cut.Mouse.MOVE = "touchmove mousemove";
-
-Cut.Mouse.END = "touchend mouseup";
-
-Cut.Mouse.subscribe = function(root, elem, move) {
-    elem = elem || document;
-    elem.addEventListener("click", mouseClick);
-    // TODO: with 'if' mouse doesn't work on touch screen, without 'if' two events
-    // on Android
-    if ("ontouchstart" in window) {
-        elem.addEventListener("touchstart", function(event) {
-            mouseStart(event, "touchmove");
-        });
-        elem.addEventListener("touchend", function(event) {
-            mouseEnd(event, "touchmove");
-        });
-        move && elem.addEventListener("touchmove", mouseMove);
-    } else {
-        elem.addEventListener("mousedown", function(event) {
-            mouseStart(event, "mousemove");
-        });
-        elem.addEventListener("mouseup", function(event) {
-            mouseEnd(event, "mousemove");
-        });
-        move && elem.addEventListener("mousemove", mouseMove);
+Cut.prototype.tween = function(duration, delay) {
+    if (!this._tween) {
+        this._tween = new Tween(this);
     }
-    var visitor = null;
-    var abs = {
+    return this._tween.tween(duration, delay);
+};
+
+Tween.prototype.ease = function(easing) {
+    this._next.easing = Easing(easing);
+    return this;
+};
+
+module.exports = Cut;
+
+module.exports.Tween = Tween;
+
+module.exports.Easing = Easing;
+
+
+},{"./core":2,"./easing":3,"./tween":7}],6:[function(require,module,exports){
+DEBUG = typeof DEBUG === "undefined" || DEBUG;
+
+function Mouse() {
+    Mouse.subscribe.apply(Mouse, arguments);
+}
+
+Mouse.CLICK = "click";
+
+Mouse.START = "touchstart mousedown";
+
+Mouse.MOVE = "touchmove mousemove";
+
+Mouse.END = "touchend mouseup";
+
+Mouse.CANCEL = "touchcancel";
+
+Mouse.subscribe = function(root, elem) {
+    var visitor = null, data = {}, abs = null, rel = null, clicked = [];
+    elem = elem || document;
+    // click events are synthesized from start/end events on same nodes
+    // elem.addEventListener('click', handleClick);
+    // with 'if' mouse doesn't work on touch screen
+    // without 'if' two events on Android?
+    // if ('ontouchstart' in window) {
+    elem.addEventListener("touchstart", handleStart);
+    elem.addEventListener("touchend", handleEnd);
+    elem.addEventListener("touchmove", handleMove);
+    elem.addEventListener("touchcancel", handleCancel);
+    // } else {
+    elem.addEventListener("mousedown", handleStart);
+    elem.addEventListener("mouseup", handleEnd);
+    elem.addEventListener("mousemove", handleMove);
+    // }
+    function handleStart(event) {
+        Mouse._xy(root, elem, event, abs);
+        DEBUG && console.log("Mouse Start: " + event.type + " " + abs);
+        event.preventDefault();
+        publish(event.type, event);
+        findClicks();
+    }
+    function handleEnd(event) {
+        // New xy is not valid/available, last xy is used instead.
+        DEBUG && console.log("Mouse End: " + event.type + " " + abs);
+        event.preventDefault();
+        publish(event.type, event);
+        if (clicked.length) {
+            DEBUG && console.log("Mouse Click: " + clicked.length);
+            fireClicks(event);
+        }
+    }
+    function handleCancel(event) {
+        DEBUG && console.log("Mouse Cancel: " + event.type);
+        event.preventDefault();
+        publish(event.type, event);
+    }
+    function handleMove(event) {
+        Mouse._xy(root, elem, event, abs);
+        // DEBUG && console.log('Mouse Move: ' + event.type + ' ' +
+        // abs);
+        if (!root._flag(event.type)) {
+            return;
+        }
+        event.preventDefault();
+        publish(event.type, event);
+    }
+    function findClicks() {
+        while (clicked.length) {
+            clicked.pop();
+        }
+        publish("click", null, clicked);
+    }
+    function fireClicks(event) {
+        data.event = event;
+        data.type = "click";
+        data.root = root;
+        data.collect = false;
+        var cancel = false;
+        while (clicked.length) {
+            var cut = clicked.shift();
+            if (cancel) {
+                continue;
+            }
+            cancel = visitor.end(cut, data) ? true : cancel;
+        }
+    }
+    function publish(type, event, collect) {
+        rel.x = abs.x;
+        rel.y = abs.y;
+        data.event = event;
+        data.type = type;
+        data.root = /* root._capture || */ root;
+        data.collect = collect;
+        data.root.visit(visitor, data);
+    }
+    visitor = {
+        reverse: true,
+        visible: true,
+        start: function(cut, data) {
+            return !cut._flag(data.type);
+        },
+        end: function(cut, data) {
+            // data: event, type, root, collect
+            rel.raw = data.event;
+            rel.type = data.type;
+            var listeners = cut.listeners(data.type);
+            if (!listeners) {
+                return;
+            }
+            cut.matrix().reverse().map(abs, rel);
+            if (!(cut === data.root || cut.attr("spy") || Mouse._isInside(cut, rel))) {
+                return;
+            }
+            if (data.collect) {
+                data.collect.push(cut);
+                return;
+            }
+            var cancel = false;
+            for (var l = 0; l < listeners.length; l++) {
+                cancel = listeners[l].call(cut, rel) ? true : cancel;
+            }
+            return cancel;
+        }
+    };
+    abs = {
         x: 0,
         y: 0,
         toString: function() {
             return (this.x | 0) + "x" + (this.y | 0);
         }
     };
-    var rel = {
+    rel = {
         x: 0,
         y: 0,
         toString: function() {
             return abs + " / " + (this.x | 0) + "x" + (this.y | 0);
         }
     };
-    var clicked = {
-        x: 0,
-        y: 0,
-        state: 0
-    };
-    function mouseStart(event, moveName) {
-        update(event, elem);
-        DEBUG && console.log("Mouse Start: " + event.type + " " + abs);
-        !move && elem.addEventListener(moveName, mouseMove);
-        event.preventDefault();
-        publish(event.type, event);
-        clicked.x = abs.x;
-        clicked.y = abs.y;
-        clicked.state = 1;
-    }
-    function mouseEnd(event, moveName) {
-        try {
-            // New xy is not valid/available, last xy is used instead.
-            DEBUG && console.log("Mouse End: " + event.type + " " + abs);
-            !move && elem.removeEventListener(moveName, mouseMove);
-            event.preventDefault();
-            publish(event.type, event);
-            if (clicked.state == 1 && clicked.x == abs.x && clicked.y == abs.y) {
-                DEBUG && console.log("Mouse Click [+]");
-                publish("click", event);
-                clicked.state = 2;
-            } else {
-                clicked.state = 0;
-            }
-        } catch (e) {
-            console && console.log(e);
+};
+
+Mouse._isInside = function(cut, point) {
+    return point.x >= 0 && point.x <= cut._pin._width && point.y >= 0 && point.y <= cut._pin._height;
+};
+
+Mouse._xy = function(root, elem, event, point) {
+    var isTouch = false;
+    // touch screen events
+    if (event.touches) {
+        if (event.touches.length) {
+            isTouch = true;
+            point.x = event.touches[0].pageX;
+            point.y = event.touches[0].pageY;
+        } else {
+            return;
+        }
+    } else {
+        // mouse events
+        point.x = event.clientX;
+        point.y = event.clientY;
+        // See http://goo.gl/JuVnF2
+        if (document.body.scrollLeft || document.body.scrollTop) {} else if (document.documentElement) {
+            point.x += document.documentElement.scrollLeft;
+            point.y += document.documentElement.scrollTop;
         }
     }
-    function mouseMove(event) {
-        try {
-            update(event, elem);
-            // DEBUG && console.log('Mouse Move: ' + event.type + ' ' +
-            // abs);
-            event.preventDefault();
-            publish(event.type, event);
-        } catch (e) {
-            console && console.log(e);
+    // accounts for border
+    point.x -= elem.clientLeft || 0;
+    point.y -= elem.clientTop || 0;
+    var par = elem;
+    while (par) {
+        point.x -= par.offsetLeft || 0;
+        point.y -= par.offsetTop || 0;
+        if (!isTouch) {
+            // touch events offset scrolling with pageX/Y
+            // so scroll offset not needed for them
+            point.x += par.scrollLeft || 0;
+            point.y += par.scrollTop || 0;
         }
+        par = par.offsetParent;
     }
-    function mouseClick(event) {
-        try {
-            update(event, elem);
-            DEBUG && console.log("Mouse Click: " + event.type + " " + abs);
-            event.preventDefault();
-            if (clicked.state != 2) {
-                publish(event.type, event);
-            } else {
-                DEBUG && console.log("Mouse Click [-]");
-            }
-        } catch (e) {
-            console && console.log(e);
+    point.x *= root.viewport().ratio || 1;
+    point.y *= root.viewport().ratio || 1;
+};
+
+module.exports = Mouse;
+
+
+},{}],7:[function(require,module,exports){
+DEBUG = typeof DEBUG === "undefined" || DEBUG;
+
+// TODO: reuse head.start/keys/end
+function Tween(cut) {
+    var tween = this;
+    this._owner = cut;
+    this._queue = [];
+    this._next = null;
+    var lastTime = 0;
+    cut.tick(function(elapsed, now, last) {
+        if (!tween._queue.length) {
+            return;
         }
-    }
-    function publish(type, event) {
-        abs.type = type;
-        abs.event = event;
-        rel.x = abs.x;
-        rel.y = abs.y;
-        // visitor.count = 0;
-        root.visit(visitor);
-    }
-    visitor = {
-        reverse: true,
-        visible: true,
-        start: function(cut) {
-            if (!cut._listens(abs.type)) {
-                return true;
-            }
-        },
-        end: function(cut) {
-            // visitor.count++;
-            var listeners = cut.listeners(abs.type);
-            if (!listeners) {
-                return;
-            }
-            cut.matrix().reverse().map(abs, rel);
-            if (cut === root || cut.attr("spy")) {} else if (rel.x < 0 || rel.x > cut._pin._width || rel.y < 0 || rel.y > cut._pin._height) {
-                return;
-            }
-            rel.raw = abs.event;
-            for (var l = 0; l < listeners.length; l++) {
-                if (listeners[l].call(cut, rel)) {
-                    return;
+        // ignore old elapsed
+        var ignore = lastTime != last;
+        lastTime = now;
+        this.touch();
+        if (ignore) {
+            return;
+        }
+        var head = tween._queue[0];
+        if (!head.time) {
+            head.time = 1;
+        } else {
+            head.time += elapsed;
+        }
+        if (head.time < head.delay) {
+            return;
+        }
+        if (!head.start) {
+            head.start = {};
+            head.keys = {};
+            for (var key in head.end) {
+                if (typeof (start = cut.pin(key)) === "number") {
+                    head.start[key] = start;
+                    head.keys[key] = key;
+                } else if (typeof (startX = cut.pin(key + "X")) === "number" && typeof (startY = cut.pin(key + "Y")) === "number") {
+                    head.start[key + "X"] = startX;
+                    head.keys[key + "X"] = key;
+                    head.start[key + "Y"] = startY;
+                    head.keys[key + "Y"] = key;
                 }
             }
         }
+        var p = (head.time - head.delay) / head.duration;
+        var over = p >= 1;
+        p = p > 1 ? 1 : p;
+        p = typeof head.easing == "function" ? head.easing(p) : p;
+        var q = 1 - p;
+        for (var key in head.keys) {
+            cut.pin(key, head.start[key] * q + head.end[head.keys[key]] * p);
+        }
+        if (over) {
+            tween._queue.shift();
+            head.then && head.then.call(cut);
+        }
+    }, true);
+}
+
+Tween.prototype.tween = function(duration, delay) {
+    this._next = {
+        id: Cut._TS++,
+        end: {},
+        duration: duration || 400,
+        delay: delay || 0
     };
-    function update(event, elem) {
-        var isTouch = false;
-        // touch screen events
-        if (event.touches) {
-            if (event.touches.length) {
-                isTouch = true;
-                abs.x = event.touches[0].pageX;
-                abs.y = event.touches[0].pageY;
-            } else {
-                return;
-            }
-        } else {
-            // mouse events
-            abs.x = event.clientX;
-            abs.y = event.clientY;
-            // See http://goo.gl/JuVnF2
-            if (document.body.scrollLeft || document.body.scrollTop) {} else if (document.documentElement) {
-                abs.x += document.documentElement.scrollLeft;
-                abs.y += document.documentElement.scrollTop;
-            }
-        }
-        // accounts for border
-        abs.x -= elem.clientLeft || 0;
-        abs.y -= elem.clientTop || 0;
-        var par = elem;
-        while (par) {
-            abs.x -= par.offsetLeft || 0;
-            abs.y -= par.offsetTop || 0;
-            if (!isTouch) {
-                // touch events offset scrolling with pageX/Y
-                // so scroll offset not needed for them
-                abs.x += par.scrollLeft || 0;
-                abs.y += par.scrollTop || 0;
-            }
-            par = par.offsetParent;
-        }
-        // see loader
-        abs.x *= root._ratio || 1;
-        abs.y *= root._ratio || 1;
-    }
+    return this;
 };
 
-if (typeof define === 'function' && define.amd) { // AMD
-  define('Cut', [], function() {
-    return Cut;
-  });
-}
+Tween.prototype.pin = function(a, b) {
+    if (this._next !== this._queue[this._queue.length - 1]) {
+        this._owner.touch();
+        this._queue.push(this._next);
+    }
+    var end = this._next.end;
+    if (typeof a === "object") {
+        for (var attr in a) {
+            end[attr] = a[attr];
+        }
+    } else if (typeof b !== "undefined") {
+        end[a] = b;
+    }
+    return this;
+};
+
+Tween.prototype.clear = function(forward) {
+    var tween;
+    while (tween = this._queue.shift()) {
+        forward && this._owner.pin(tween.end);
+    }
+    return this;
+};
+
+Tween.prototype.then = function(then) {
+    this._next.then = then;
+    return this;
+};
+
+Tween.prototype.ease = function(easing) {
+    this._next.easing = easing;
+    return this;
+};
+
+module.exports = Tween;
+
+
+},{}]},{},[1])(1)
+});
