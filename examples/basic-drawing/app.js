@@ -2,23 +2,24 @@ Cut(function(root, container) {
 
   Cut.Mouse(root, container);
 
-  root.viewbox(200, 200);
-
-  var width = 50, height = 50, r1 = 10, r2 = 20;
-
-  var image = Cut.image().appendTo(root).pin('align', 0.5);
-
-  root.on(Cut.Mouse.CLICK, function() {
+  root.viewbox(200, 200).on(Cut.Mouse.CLICK, function() {
     draw();
   });
 
-  var p = 4;
+  var width = 50, height = 50;
+  var r1 = 10, r2 = 20, p = 4;
+
+  var image = Cut.drawing().appendTo(root).pin('align', 0.5);
+
   draw();
 
   function draw() {
-    p = (p + 1 - 3) % 3 + 3;
-    image.image(Cut.Out.drawing(width, height, 4, function(ctx, ratio) {
-      ctx.scale(ratio, ratio);
+    image.draw(function(ctx) {
+      p = (p + 1 - 3) % 3 + 3;
+
+      this.size(width, height, 4);
+
+      ctx.scale(4, 4);
 
       // draw star
       ctx.translate(width / 2, height / 2);
@@ -38,6 +39,6 @@ Cut(function(root, container) {
       ctx.lineWidth = 1;
       ctx.strokeStyle = 'black';
       ctx.stroke();
-    }));
+    });
   }
 });
